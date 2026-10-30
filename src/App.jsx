@@ -20,6 +20,12 @@ export default function App() {
   const [profile, setProfile] = useState(null)
   const [clients, setClients] = useState([])
   const [clientForm, setClientForm] = useState({nombre:'',telefono:'',correo:'',direccion:''})
+  const [repairs,setRepairs] = useState([])
+  const [products,setProducts] = useState([])
+  const [repairBusy,setRepairBusy] = useState(false)
+  const [productBusy,setProductBusy] = useState(false)
+  const [repairForm,setRepairForm] = useState({cliente_id:'',marca:'',modelo:'',imei:'',falla_reportada:'',diagnostico:'',costo_reparacion:'0',anticipo:'0'})
+  const [productForm,setProductForm] = useState({nombre:'',categoria:'',marca:'',modelo:'',codigo:'',stock:'0',stock_minimo:'1',costo:'0',precio_venta:'0'})
   const [clientBusy, setClientBusy] = useState(false)
   const [clientEdit, setClientEdit] = useState(null)
   useEffect(() => {
@@ -37,7 +43,13 @@ export default function App() {
     if(error) setNotice('No se pudieron cargar clientes: '+error.message)
     else setClients(data||[])
   }
-  useEffect(()=>{if(profile?.activo && section==='Clientes') loadClients()},[profile?.id,section])
+  useEffect(()=>{if(profile?.activo && ['Clientes','Recepción de equipos','Órdenes de servicio','Panel principal'].includes(section)) loadClients()},[profile?.id,section])
+  async function loadRepairs(){const {data,error}=await supabase.from('reparaciones').select('*,clientes(nombre,telefono)').order('fecha_ingreso',{ascending:false}).limit(200);if(error)setNotice('Error cargando reparaciones: '+error.message);else setRepairs(data||[])}
+  async function loadProducts(){const {data,error}=await supabase.from('productos').select('*').order('nombre').limit(300);if(error)setNotice('Error cargando inventario: '+error.message);else setProducts(data||[])}
+  useEffect(()=>{if(profile?.activo && ['Órdenes de servicio','Panel principal','Recepción de equipos'].includes(section))loadRepairs();if(profile?.activo && ['Inventario','Panel principal'].includes(section))loadProducts()},[profile?.id,section])
+  async function saveRepair(e){e.preventDefault();setRepairBusy(true);const payload={...repairForm,cliente_id:repairForm.cliente_id||null,imei:repairForm.imei||null,diagnostico:repairForm.diagnostico||null,costo_reparacion:Number(repairForm.costo_reparacion)||0,anticipo:Number(repairForm.anticipo)||0,codigo:'CAL-'+Date.now().toString(36).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase()};const {error}=await supabase.from('reparaciones').insert(payload);setRepairBusy(false);if(error){setNotice('No se pudo guardar la reparación: '+error.message);return}setNotice('Orden guardada en Supabase.');setRepairForm({cliente_id:'',marca:'',modelo:'',imei:'',falla_reportada:'',diagnostico:'',costo_reparacion:'0',anticipo:'0'});setSection('Órdenes de servicio');loadRepairs()}
+  async function updateRepair(id,estado){const {error}=await supabase.from('reparaciones').update({estado,fecha_entrega:estado==='entregado'?new Date().toISOString():null}).eq('id',id);if(error)setNotice(error.message);else loadRepairs()}
+  async function saveProduct(e){e.preventDefault();setProductBusy(true);const payload={...productForm,codigo:productForm.codigo||null,stock:Number(productForm.stock)||0,stock_minimo:Number(productForm.stock_minimo)||0,costo:Number(productForm.costo)||0,precio_venta:Number(productForm.precio_venta)||0};const {error}=await supabase.from('productos').insert(payload);setProductBusy(false);if(error){setNotice('Error: '+error.message);return}setProductForm({nombre:'',categoria:'',marca:'',modelo:'',codigo:'',stock:'0',stock_minimo:'1',costo:'0',precio_venta:'0'});setNotice('Producto registrado en Supabase.');loadProducts()}
   async function saveClient(e){
     e.preventDefault();setClientBusy(true)
     const payload={nombre:clientForm.nombre.trim(),telefono:clientForm.telefono.trim(),correo:clientForm.correo.trim()||null,direccion:clientForm.direccion.trim()||null}
@@ -103,7 +115,7 @@ export default function App() {
     <main className="main">
       <header className="topbar"><button className="icon-btn menu-toggle" onClick={() => setMobileMenu(true)}><Menu/></button><div className="crumb">Sistema <span>/</span> {section}</div><div className="top-actions"><span className={`connection ${online ? 'on' : 'off'}`}>{online ? <Cloud size={15}/> : <CloudOff size={15}/>} {online ? 'En línea' : 'Sin conexión'}</span><div className="avatar" title={profile.nombre}>{profile.nombre?.slice(0,2).toUpperCase()}</div><button className="text-btn" onClick={()=>supabase.auth.signOut()}>Salir</button></div></header>
       <div className="content">
-        <div className="welcome-row"><div><div className="eyebrow">SOLUCIONES TECNOLÓGICAS CALEL</div><h1>{section}</h1><p>Controla tus reparaciones, clientes, inventario y ventas desde un solo lugar.</p></div><button className="primary" onClick={() => setShowIntake(true)} disabled><Plus size={17}/> Recepción (próximamente)</button></div>
+        <div className="welcome-row"><div><div className="eyebrow">SOLUCIONES TECNOLÓGICAS CALEL</div><h1>{section}</h1><p>Controla tus reparaciones, clientes, inventario y ventas desde un solo lugar.</p></div><button className="primary" onClick={() => setSection('Recepción de equipos')}><Plus size={17}/> Nueva recepción</button></div>
         {notice && <div className="notice"><Activity size={17}/><span>{notice}</span><button onClick={() => setNotice('')}><X size={16}/></button></div>}
         {section === 'Clientes' ? <section className="panel clients-panel"><div className="panel-head"><div><h2>Clientes</h2><p>Información almacenada en Supabase · {clients.length} registros</p></div></div>
           <form onSubmit={saveClient} className="client-form">
@@ -115,11 +127,11 @@ export default function App() {
             {clientEdit && <button type="button" className="secondary" onClick={()=>{setClientEdit(null);setClientForm({nombre:'',telefono:'',correo:'',direccion:''})}}>Cancelar edición</button>}
           </form>
           <div className="client-list">{clients.map(c=><div className="client-row" key={c.id}><div><b>{c.nombre}</b><small>{c.telefono||'Sin teléfono'} · {c.correo||'Sin correo'}</small></div><button className="secondary" onClick={()=>{setClientEdit(c.id);setClientForm({nombre:c.nombre||'',telefono:c.telefono||'',correo:c.correo||'',direccion:c.direccion||''})}}>Editar</button></div>)}{clients.length===0 && <p className="muted">Todavía no hay clientes registrados.</p>}</div>
-        </section> : section !== 'Panel principal' ? <section className="panel"><h2>{section}</h2><p className="muted">Este módulo aún está en desarrollo. No se han habilitado operaciones hasta configurar sus permisos y almacenamiento seguro.</p></section> : <>
+        </section> : section === 'Recepción de equipos' ? <section className="panel"><h2>Nueva recepción</h2><p className="muted">Registra primero al cliente en el módulo Clientes. La orden se guardará en Supabase.</p><form className="client-form" onSubmit={saveRepair}><select required value={repairForm.cliente_id} onChange={e=>setRepairForm({...repairForm,cliente_id:e.target.value})}><option value="">Seleccionar cliente *</option>{clients.map(c=><option value={c.id} key={c.id}>{c.nombre} — {c.telefono}</option>)}</select>{['marca','modelo','imei','falla_reportada','diagnostico','costo_reparacion','anticipo'].map(k=><input key={k} required={['marca','modelo','falla_reportada'].includes(k)} type={['costo_reparacion','anticipo'].includes(k)?'number':'text'} min={['costo_reparacion','anticipo'].includes(k)?0:undefined} step={['costo_reparacion','anticipo'].includes(k)?'0.01':undefined} placeholder={({marca:'Marca *',modelo:'Modelo *',imei:'IMEI (opcional)',falla_reportada:'Falla reportada *',diagnostico:'Diagnóstico inicial',costo_reparacion:'Costo estimado Q',anticipo:'Anticipo Q'})[k]} value={repairForm[k]} onChange={e=>setRepairForm({...repairForm,[k]:e.target.value})}/>)}<button className="primary" disabled={repairBusy}>{repairBusy?'Guardando…':'Guardar orden en Supabase'}</button></form><p className="muted">Fotografías: todavía no habilitadas; se agregarán con almacenamiento privado.</p></section> : section === 'Órdenes de servicio' ? <section className="panel"><div className="panel-head"><h2>Órdenes de servicio ({repairs.length})</h2><button className="secondary" onClick={loadRepairs}>Actualizar</button></div><div className="client-list">{repairs.map(r=><div className="client-row" key={r.id}><div><b>{r.codigo} · {r.marca} {r.modelo}</b><small>{r.clientes?.nombre||'Sin cliente'} · {r.falla_reportada} · Q {Number(r.costo_reparacion||0).toFixed(2)}</small></div><select aria-label="Estado de la orden" value={r.estado} onChange={e=>updateRepair(r.id,e.target.value)}>{['recibido','diagnostico','esperando_repuesto','en_reparacion','reparado','entregado','cancelado'].map(st=><option value={st} key={st}>{st.replaceAll('_',' ')}</option>)}</select></div>)}{!repairs.length&&<p className="muted">No hay órdenes registradas.</p>}</div></section> : section === 'Inventario' ? <section className="panel"><h2>Inventario</h2><form className="client-form" onSubmit={saveProduct}>{['nombre','categoria','marca','modelo','codigo','stock','stock_minimo','costo','precio_venta'].map(k=><input key={k} required={k==='nombre'} type={['stock','stock_minimo','costo','precio_venta'].includes(k)?'number':'text'} min={['stock','stock_minimo','costo','precio_venta'].includes(k)?0:undefined} step={['costo','precio_venta'].includes(k)?'0.01':'1'} placeholder={k.replaceAll('_',' ')+(k==='nombre'?' *':'')} value={productForm[k]} onChange={e=>setProductForm({...productForm,[k]:e.target.value})}/>)}<button className="primary" disabled={productBusy}>{productBusy?'Guardando…':'Registrar producto'}</button></form><div className="client-list">{products.map(p=><div className="client-row" key={p.id}><div><b>{p.nombre}</b><small>{p.codigo||'Sin código'} · Stock: {p.stock} · Venta: Q {Number(p.precio_venta||0).toFixed(2)}</small></div></div>)}{!products.length&&<p className="muted">Todavía no hay productos.</p>}</div></section> : section !== 'Panel principal' ? <section className="panel"><h2>{section}</h2><p className="muted">Este módulo aún está en desarrollo. No se han habilitado operaciones hasta configurar sus permisos y almacenamiento seguro.</p></section> : <>
         <div className="stat-grid">
-          <Stat icon={Wrench} label="Órdenes pendientes" value={orders.length} hint="Registros locales de prueba"/>
-          <Stat icon={Users} label="Clientes registrados" value="—" hint="Conecta Supabase para activar"/>
-          <Stat icon={Package} label="Productos en inventario" value="—" hint="Módulo por implementar"/>
+          <Stat icon={Wrench} label="Órdenes pendientes" value={repairs.filter(r=>!['entregado','cancelado'].includes(r.estado)).length} hint="Órdenes en Supabase"/>
+          <Stat icon={Users} label="Clientes registrados" value={clients.length} hint="Clientes en Supabase"/>
+          <Stat icon={Package} label="Productos en inventario" value={products.length} hint="Productos en Supabase"/>
           <Stat icon={CreditCard} label="Ventas del día" value="Q 0.00" hint="Quetzales guatemaltecos"/>
         </div>
         <div className="two-col">
@@ -134,7 +146,7 @@ export default function App() {
           </section>
         </div>
         </>}
-        <div className="footnote">Versión inicial 0.1 · Los módulos se activarán progresivamente. No uses datos reales de clientes hasta configurar autenticación, permisos y respaldos.</div>
+        <div className="footnote">Versión 0.3 · Clientes, reparaciones e inventario conectados a Supabase. Fotografías, caja, ventas y modo sin conexión siguen pendientes.</div>
       </div>
     </main>
     {false && showIntake && <IntakeModal onClose={() => setShowIntake(false)} onSave={saveIntake}/>}

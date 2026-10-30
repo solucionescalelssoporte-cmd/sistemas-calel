@@ -1,0 +1,10 @@
+{
+  "name": "Soluciones Tecnológicas Calel",
+  "short_name": "ST Calel",
+  "description": "Gestión de reparaciones, inventario y ventas",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fa",
+  "theme_color": "#14243a",
+  "icons": []
+}

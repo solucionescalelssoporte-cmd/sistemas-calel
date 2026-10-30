@@ -1,0 +1,7 @@
+Proyecto Supabase configurado con URL.
+1. Copia .env.example a .env.
+2. Sustituye PEGA_AQUI_TU_CLAVE_PUBLICA_SB_PUBLISHABLE por tu clave sb_publishable_.
+3. Nunca utilices sb_secret_ en archivos del frontend. Revoca la clave secreta compartida.
+4. Ejecuta npm install y npm run dev.
+5. ATENCION: El esquema SQL incluido en este ZIP es distinto de las tablas creadas previamente. NO ejecutes schema.sql encima de tu base actual sin migracion.
+6. La sincronizacion de datos con Supabase aun NO esta implementada.

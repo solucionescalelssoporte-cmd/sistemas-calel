@@ -16,6 +16,36 @@ const nav = [
 
 export default function App() {
   const [section, setSection] = useState('Panel principal')
+  const [session, setSession] = useState(undefined)
+  const [profile, setProfile] = useState(null)
+  const [clients, setClients] = useState([])
+  const [clientForm, setClientForm] = useState({nombre:'',telefono:'',correo:'',direccion:''})
+  const [clientBusy, setClientBusy] = useState(false)
+  const [clientEdit, setClientEdit] = useState(null)
+  useEffect(() => {
+    if (!supabase) { setSession(null); return }
+    supabase.auth.getSession().then(({data}) => setSession(data.session)).catch(() => setSession(null))
+    const {data:{subscription}} = supabase.auth.onAuthStateChange((_event,s) => setSession(s))
+    return () => subscription.unsubscribe()
+  }, [])
+  useEffect(() => {
+    if (!session) {setProfile(null);setClients([]);return}
+    supabase.from('perfiles').select('id,nombre,rol,activo').eq('id',session.user.id).single().then(({data,error})=>setProfile(error?null:data))
+  },[session?.user?.id])
+  async function loadClients(){
+    const {data,error}=await supabase.from('clientes').select('id,nombre,telefono,correo,direccion,creado_en').order('creado_en',{ascending:false}).limit(200)
+    if(error) setNotice('No se pudieron cargar clientes: '+error.message)
+    else setClients(data||[])
+  }
+  useEffect(()=>{if(profile?.activo && section==='Clientes') loadClients()},[profile?.id,section])
+  async function saveClient(e){
+    e.preventDefault();setClientBusy(true)
+    const payload={nombre:clientForm.nombre.trim(),telefono:clientForm.telefono.trim(),correo:clientForm.correo.trim()||null,direccion:clientForm.direccion.trim()||null}
+    const result=clientEdit ? await supabase.from('clientes').update(payload).eq('id',clientEdit) : await supabase.from('clientes').insert(payload)
+    setClientBusy(false)
+    if(result.error){setNotice('Error al guardar cliente: '+result.error.message);return}
+    setClientForm({nombre:'',telefono:'',correo:'',direccion:''});setClientEdit(null);setNotice('Cliente guardado correctamente en Supabase.');loadClients()
+  }
   const [online, setOnline] = useState(navigator.onLine)
   const [pending, setPending] = useState(0)
   const [orders, setOrders] = useState([])
@@ -57,6 +87,11 @@ export default function App() {
     setNotice('La conexión está configurada, pero falta completar el alta de organización y la sincronización protegida. No se enviaron registros.')
   }
 
+  if (!isSupabaseConfigured) return <div className="auth-screen"><div className="auth-card"><h2>ST CALEL</h2><p>Faltan las variables públicas de Supabase en Netlify.</p></div></div>
+  if (session === undefined) return <div className="auth-screen">Verificando sesión…</div>
+  if (!session) return <Login />
+  if (!profile) return <div className="auth-screen"><div className="auth-card"><h2>Cuenta sin perfil</h2><p>Tu usuario existe, pero no tiene un perfil habilitado en la tabla perfiles. Contacta al administrador.</p><button className="secondary" onClick={()=>supabase.auth.signOut()}>Cerrar sesión</button></div></div>
+  if (!profile.activo) return <div className="auth-screen"><div className="auth-card"><h2>Cuenta desactivada</h2><button className="secondary" onClick={()=>supabase.auth.signOut()}>Cerrar sesión</button></div></div>
   return <div className="app-shell">
     <aside className={`sidebar ${mobileMenu ? 'open' : ''}`}>
       <div className="brand"><div className="brand-mark"><Smartphone size={23}/></div><div><b>ST CALEL</b><small>Sistema de gestión</small></div><button className="icon-btn mobile-close" onClick={() => setMobileMenu(false)}><X/></button></div>
@@ -66,10 +101,21 @@ export default function App() {
     </aside>
     {mobileMenu && <div className="scrim" onClick={() => setMobileMenu(false)} />}
     <main className="main">
-      <header className="topbar"><button className="icon-btn menu-toggle" onClick={() => setMobileMenu(true)}><Menu/></button><div className="crumb">Sistema <span>/</span> {section}</div><div className="top-actions"><span className={`connection ${online ? 'on' : 'off'}`}>{online ? <Cloud size={15}/> : <CloudOff size={15}/>} {online ? 'En línea' : 'Sin conexión'}</span><div className="avatar">SC</div></div></header>
+      <header className="topbar"><button className="icon-btn menu-toggle" onClick={() => setMobileMenu(true)}><Menu/></button><div className="crumb">Sistema <span>/</span> {section}</div><div className="top-actions"><span className={`connection ${online ? 'on' : 'off'}`}>{online ? <Cloud size={15}/> : <CloudOff size={15}/>} {online ? 'En línea' : 'Sin conexión'}</span><div className="avatar" title={profile.nombre}>{profile.nombre?.slice(0,2).toUpperCase()}</div><button className="text-btn" onClick={()=>supabase.auth.signOut()}>Salir</button></div></header>
       <div className="content">
-        <div className="welcome-row"><div><div className="eyebrow">SOLUCIONES TECNOLÓGICAS CALEL</div><h1>{section}</h1><p>Controla tus reparaciones, clientes, inventario y ventas desde un solo lugar.</p></div><button className="primary" onClick={() => setShowIntake(true)}><Plus size={17}/> Nueva recepción</button></div>
+        <div className="welcome-row"><div><div className="eyebrow">SOLUCIONES TECNOLÓGICAS CALEL</div><h1>{section}</h1><p>Controla tus reparaciones, clientes, inventario y ventas desde un solo lugar.</p></div><button className="primary" onClick={() => setShowIntake(true)} disabled><Plus size={17}/> Recepción (próximamente)</button></div>
         {notice && <div className="notice"><Activity size={17}/><span>{notice}</span><button onClick={() => setNotice('')}><X size={16}/></button></div>}
+        {section === 'Clientes' ? <section className="panel clients-panel"><div className="panel-head"><div><h2>Clientes</h2><p>Información almacenada en Supabase · {clients.length} registros</p></div></div>
+          <form onSubmit={saveClient} className="client-form">
+            <input required placeholder="Nombre completo *" value={clientForm.nombre} onChange={e=>setClientForm({...clientForm,nombre:e.target.value})}/>
+            <input placeholder="Teléfono" value={clientForm.telefono} onChange={e=>setClientForm({...clientForm,telefono:e.target.value})}/>
+            <input type="email" placeholder="Correo electrónico" value={clientForm.correo} onChange={e=>setClientForm({...clientForm,correo:e.target.value})}/>
+            <input placeholder="Dirección" value={clientForm.direccion} onChange={e=>setClientForm({...clientForm,direccion:e.target.value})}/>
+            <button className="primary" disabled={clientBusy}>{clientBusy?'Guardando…':clientEdit?'Actualizar cliente':'Registrar cliente'}</button>
+            {clientEdit && <button type="button" className="secondary" onClick={()=>{setClientEdit(null);setClientForm({nombre:'',telefono:'',correo:'',direccion:''})}}>Cancelar edición</button>}
+          </form>
+          <div className="client-list">{clients.map(c=><div className="client-row" key={c.id}><div><b>{c.nombre}</b><small>{c.telefono||'Sin teléfono'} · {c.correo||'Sin correo'}</small></div><button className="secondary" onClick={()=>{setClientEdit(c.id);setClientForm({nombre:c.nombre||'',telefono:c.telefono||'',correo:c.correo||'',direccion:c.direccion||''})}}>Editar</button></div>)}{clients.length===0 && <p className="muted">Todavía no hay clientes registrados.</p>}</div>
+        </section> : section !== 'Panel principal' ? <section className="panel"><h2>{section}</h2><p className="muted">Este módulo aún está en desarrollo. No se han habilitado operaciones hasta configurar sus permisos y almacenamiento seguro.</p></section> : <>
         <div className="stat-grid">
           <Stat icon={Wrench} label="Órdenes pendientes" value={orders.length} hint="Registros locales de prueba"/>
           <Stat icon={Users} label="Clientes registrados" value="—" hint="Conecta Supabase para activar"/>
@@ -87,10 +133,11 @@ export default function App() {
             <div className="security-note"><ShieldCheck size={16}/> Las fotografías y datos de clientes deben almacenarse en espacios privados con permisos por usuario.</div>
           </section>
         </div>
+        </>}
         <div className="footnote">Versión inicial 0.1 · Los módulos se activarán progresivamente. No uses datos reales de clientes hasta configurar autenticación, permisos y respaldos.</div>
       </div>
     </main>
-    {showIntake && <IntakeModal onClose={() => setShowIntake(false)} onSave={saveIntake}/>}
+    {false && showIntake && <IntakeModal onClose={() => setShowIntake(false)} onSave={saveIntake}/>}
   </div>
 }
 
@@ -120,3 +167,8 @@ function IntakeModal({onClose, onSave}) {
   </div></div>
 }
 function Field({label,wide,children}) { return <label className={`field ${wide?'wide':''}`}><span>{label}</span>{children}</label> }
+function Login(){
+ const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false)
+ async function submit(e){e.preventDefault();setBusy(true);setError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setError('No se pudo iniciar sesión. Revisa tu correo, contraseña y confirmación de usuario.');setBusy(false)}
+ return <div className="auth-screen"><form className="auth-card" onSubmit={submit}><div className="brand-mark"><Smartphone/></div><h2>Soluciones Tecnológicas Calel</h2><p>Acceso al sistema de gestión</p><label>Correo electrónico<input type="email" required autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Contraseña<input type="password" required autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)}/></label>{error&&<p className="auth-error">{error}</p>}<button className="primary" disabled={busy}>{busy?'Ingresando…':'Iniciar sesión'}</button></form></div>
+}

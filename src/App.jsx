@@ -25,6 +25,9 @@ export default function App() {
   const [repairBusy,setRepairBusy] = useState(false)
   const [selectedRepair,setSelectedRepair] = useState(null)
   const [detailBusy,setDetailBusy] = useState(false)
+  const [evidence,setEvidence] = useState([])
+  const [evidenceBusy,setEvidenceBusy] = useState(false)
+  const [evidenceError,setEvidenceError] = useState('')
   const [detailForm,setDetailForm] = useState({diagnostico:'',costo_reparacion:'0',anticipo:'0'})
   const [productBusy,setProductBusy] = useState(false)
   const [repairForm,setRepairForm] = useState({cliente_id:'',marca:'',modelo:'',imei:'',falla_reportada:'',diagnostico:'',costo_reparacion:'0',anticipo:'0'})
@@ -51,7 +54,37 @@ export default function App() {
   async function loadProducts(){const {data,error}=await supabase.from('productos').select('*').order('nombre').limit(300);if(error)setNotice('Error cargando inventario: '+error.message);else setProducts(data||[])}
   useEffect(()=>{if(profile?.activo && ['Órdenes de servicio','Panel principal','Recepción de equipos'].includes(section))loadRepairs();if(profile?.activo && ['Inventario','Panel principal'].includes(section))loadProducts()},[profile?.id,section])
   async function saveRepair(e){e.preventDefault();setRepairBusy(true);const payload={...repairForm,cliente_id:repairForm.cliente_id||null,imei:repairForm.imei||null,diagnostico:repairForm.diagnostico||null,costo_reparacion:Number(repairForm.costo_reparacion)||0,anticipo:Number(repairForm.anticipo)||0,codigo:'CAL-'+Date.now().toString(36).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase()};const {error}=await supabase.from('reparaciones').insert(payload);setRepairBusy(false);if(error){setNotice('No se pudo guardar la reparación: '+error.message);return}setNotice('Orden guardada en Supabase.');setRepairForm({cliente_id:'',marca:'',modelo:'',imei:'',falla_reportada:'',diagnostico:'',costo_reparacion:'0',anticipo:'0'});setSection('Órdenes de servicio');loadRepairs()}
-  function openRepair(r){setSelectedRepair(r);setDetailForm({diagnostico:r.diagnostico||'',costo_reparacion:String(r.costo_reparacion??0),anticipo:String(r.anticipo??0)})}
+  async function loadEvidence(repairId){
+    setEvidenceError('')
+    const {data,error}=await supabase.from('fotos_reparacion').select('id,ruta,nombre,creado_en').eq('reparacion_id',repairId).order('creado_en',{ascending:false})
+    if(error){setEvidenceError('No se pudieron consultar las fotos: '+error.message);return}
+    const entries=await Promise.all((data||[]).map(async item=>{
+      const {data:link,error:linkError}=await supabase.storage.from('evidencias-reparacion').createSignedUrl(item.ruta,600)
+      return {...item,url:linkError?null:link?.signedUrl}
+    }))
+    setEvidence(entries)
+  }
+  function openRepair(r){setSelectedRepair(r);setEvidence([]);setDetailForm({diagnostico:r.diagnostico||'',costo_reparacion:String(r.costo_reparacion??0),anticipo:String(r.anticipo??0)});loadEvidence(r.id)}
+  async function uploadEvidence(event){
+    const files=Array.from(event.target.files||[])
+    event.target.value=''
+    if(!selectedRepair||!files.length)return
+    if(files.length>6){setEvidenceError('Sube máximo 6 fotos por vez.');return}
+    if(files.some(f=>!['image/jpeg','image/png','image/webp'].includes(f.type)||f.size>5*1024*1024)){
+      setEvidenceError('Solo JPG, PNG o WebP de máximo 5 MB por foto.');return
+    }
+    setEvidenceBusy(true);setEvidenceError('')
+    for(const file of files){
+      const ext={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}[file.type]
+      const path=selectedRepair.id+'/'+crypto.randomUUID()+'.'+ext
+      const {error:uploadError}=await supabase.storage.from('evidencias-reparacion').upload(path,file,{contentType:file.type,upsert:false})
+      if(uploadError){setEvidenceError('Error al subir '+file.name+': '+uploadError.message);break}
+      const {error:dbError}=await supabase.from('fotos_reparacion').insert({reparacion_id:selectedRepair.id,ruta:path,nombre:file.name,subido_por:session.user.id})
+      if(dbError){await supabase.storage.from('evidencias-reparacion').remove([path]);setEvidenceError('Error al registrar foto: '+dbError.message);break}
+    }
+    await loadEvidence(selectedRepair.id)
+    setEvidenceBusy(false)
+  }
   async function saveRepairDetail(e){e.preventDefault();if(!selectedRepair)return;const costo=Number(detailForm.costo_reparacion),anticipo=Number(detailForm.anticipo);if(!Number.isFinite(costo)||!Number.isFinite(anticipo)||costo<0||anticipo<0){setNotice('Revisa los importes.');return}setDetailBusy(true);const {error}=await supabase.from('reparaciones').update({diagnostico:detailForm.diagnostico,costo_reparacion:costo,anticipo}).eq('id',selectedRepair.id);setDetailBusy(false);if(error){setNotice('No se pudo actualizar: '+error.message);return}setSelectedRepair(null);setNotice('Expediente actualizado en Supabase.');await loadRepairs()}
   async function updateRepair(id,estado){const {error}=await supabase.from('reparaciones').update({estado,fecha_entrega:estado==='entregado'?new Date().toISOString():null}).eq('id',id);if(error)setNotice(error.message);else loadRepairs()}
   async function saveProduct(e){e.preventDefault();setProductBusy(true);const payload={...productForm,codigo:productForm.codigo||null,stock:Number(productForm.stock)||0,stock_minimo:Number(productForm.stock_minimo)||0,costo:Number(productForm.costo)||0,precio_venta:Number(productForm.precio_venta)||0};const {error}=await supabase.from('productos').insert(payload);setProductBusy(false);if(error){setNotice('Error: '+error.message);return}setProductForm({nombre:'',categoria:'',marca:'',modelo:'',codigo:'',stock:'0',stock_minimo:'1',costo:'0',precio_venta:'0'});setNotice('Producto registrado en Supabase.');loadProducts()}
@@ -151,10 +184,10 @@ export default function App() {
           </section>
         </div>
         </>}
-        <div className="footnote">Versión 0.4 · Expedientes, costos y actividad reciente conectados a Supabase. Fotografías, caja, ventas y modo sin conexión siguen pendientes.</div>
+        <div className="footnote">Versión 0.5 · Fotografías privadas de evidencia en Supabase. Caja, ventas y modo sin conexión siguen pendientes.</div>
       </div>
     </main>
-    {selectedRepair && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Expediente de reparación"><div className="modal" style={{maxWidth:680}}><div className="modal-head"><div><span className="eyebrow">EXPEDIENTE DE REPARACIÓN</span><h2>{selectedRepair.codigo}</h2><p>{selectedRepair.marca} {selectedRepair.modelo} · {selectedRepair.estado.replaceAll('_',' ')}</p></div><button className="icon-btn" onClick={()=>setSelectedRepair(null)} aria-label="Cerrar"><X/></button></div><div style={{padding:'0 24px 24px'}}><p><b>Cliente:</b> {selectedRepair.clientes?.nombre||'Sin cliente'} · {selectedRepair.clientes?.telefono||'Sin teléfono'}</p><p><b>IMEI / serie:</b> {selectedRepair.imei||'No registrado'}</p><p><b>Falla reportada:</b> {selectedRepair.falla_reportada||'No registrada'}</p><p><b>Fecha de ingreso:</b> {selectedRepair.fecha_ingreso?new Date(selectedRepair.fecha_ingreso).toLocaleString('es-GT'):'No registrada'}</p><form onSubmit={saveRepairDetail} className="client-form" style={{display:'grid',gridTemplateColumns:'1fr 1fr'}}><label style={{gridColumn:'1 / -1'}}>Diagnóstico<textarea style={{width:'100%',minHeight:90}} value={detailForm.diagnostico} onChange={e=>setDetailForm({...detailForm,diagnostico:e.target.value})}/></label><label>Costo total Q<input required type="number" min="0" step="0.01" value={detailForm.costo_reparacion} onChange={e=>setDetailForm({...detailForm,costo_reparacion:e.target.value})}/></label><label>Anticipo Q<input required type="number" min="0" step="0.01" value={detailForm.anticipo} onChange={e=>setDetailForm({...detailForm,anticipo:e.target.value})}/></label><p style={{gridColumn:'1 / -1'}}><b>Saldo pendiente: Q {Math.max(0,Number(detailForm.costo_reparacion||0)-Number(detailForm.anticipo||0)).toFixed(2)}</b></p><button className="primary" disabled={detailBusy}>{detailBusy?'Guardando…':'Guardar cambios'}</button><button type="button" className="secondary" onClick={()=>setSelectedRepair(null)}>Cerrar</button></form><p className="muted">La carga de fotografías privadas estará disponible en una actualización posterior.</p></div></div></div>}
+    {selectedRepair && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Expediente de reparación"><div className="modal" style={{maxWidth:680}}><div className="modal-head"><div><span className="eyebrow">EXPEDIENTE DE REPARACIÓN</span><h2>{selectedRepair.codigo}</h2><p>{selectedRepair.marca} {selectedRepair.modelo} · {selectedRepair.estado.replaceAll('_',' ')}</p></div><button className="icon-btn" onClick={()=>setSelectedRepair(null)} aria-label="Cerrar"><X/></button></div><div style={{padding:'0 24px 24px'}}><p><b>Cliente:</b> {selectedRepair.clientes?.nombre||'Sin cliente'} · {selectedRepair.clientes?.telefono||'Sin teléfono'}</p><p><b>IMEI / serie:</b> {selectedRepair.imei||'No registrado'}</p><p><b>Falla reportada:</b> {selectedRepair.falla_reportada||'No registrada'}</p><p><b>Fecha de ingreso:</b> {selectedRepair.fecha_ingreso?new Date(selectedRepair.fecha_ingreso).toLocaleString('es-GT'):'No registrada'}</p><form onSubmit={saveRepairDetail} className="client-form" style={{display:'grid',gridTemplateColumns:'1fr 1fr'}}><label style={{gridColumn:'1 / -1'}}>Diagnóstico<textarea style={{width:'100%',minHeight:90}} value={detailForm.diagnostico} onChange={e=>setDetailForm({...detailForm,diagnostico:e.target.value})}/></label><label>Costo total Q<input required type="number" min="0" step="0.01" value={detailForm.costo_reparacion} onChange={e=>setDetailForm({...detailForm,costo_reparacion:e.target.value})}/></label><label>Anticipo Q<input required type="number" min="0" step="0.01" value={detailForm.anticipo} onChange={e=>setDetailForm({...detailForm,anticipo:e.target.value})}/></label><p style={{gridColumn:'1 / -1'}}><b>Saldo pendiente: Q {Math.max(0,Number(detailForm.costo_reparacion||0)-Number(detailForm.anticipo||0)).toFixed(2)}</b></p><button className="primary" disabled={detailBusy}>{detailBusy?'Guardando…':'Guardar cambios'}</button><button type="button" className="secondary" onClick={()=>setSelectedRepair(null)}>Cerrar</button></form><div className="evidence-section"><h3>Fotografías de evidencia</h3><p className="muted">Archivos privados en Supabase. Enlaces temporales válidos durante 10 minutos. No fotografíes contraseñas ni información personal visible en la pantalla.</p><label className="secondary evidence-upload">{evidenceBusy?'Subiendo fotografías…':'Agregar fotografías (JPG, PNG, WebP · máximo 5 MB)'}<input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={evidenceBusy} onChange={uploadEvidence} style={{display:'none'}}/></label>{evidenceError&&<p role="alert" className="auth-error">{evidenceError}</p>}<div className="evidence-grid">{evidence.map(item=><div className="evidence-item" key={item.id}>{item.url?<a href={item.url} target="_blank" rel="noreferrer"><img src={item.url} alt={'Evidencia '+item.nombre}/></a>:<span>Vista no disponible</span>}<small title={item.nombre}>{item.nombre}</small></div>)}</div>{!evidence.length&&<p className="muted">Aún no hay fotografías en este expediente.</p>}</div></div></div></div>}
     {false && showIntake && <IntakeModal onClose={() => setShowIntake(false)} onSave={saveIntake}/>}
   </div>
 }
